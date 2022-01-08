@@ -15,6 +15,8 @@
 #include "win32/fscache.h"
 #include "../attr.h"
 #include "../string-list.h"
+#define SECURITY_WIN32
+#include <sspi.h>
 
 #define HCAST(type, handle) ((type)(intptr_t)handle)
 
