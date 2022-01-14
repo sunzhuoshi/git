@@ -146,15 +146,101 @@ test_expect_success 'interaction with clone --no-checkout (unborn index)' '
 '
 
 test_expect_success 'set enables config' '
-	git init empty-config &&
+	git init initial-config &&
 	(
-		cd empty-config &&
+		cd initial-config &&
+		test_commit file file &&
+		mkdir dir &&
+		test_commit dir dir/file &&
+		git worktree add --detach ../initial-worktree &&
+		git sparse-checkout set --cone
+	) &&
+	test_cmp_config -C initial-config true core.sparseCheckout &&
+	test_cmp_config -C initial-worktree true core.sparseCheckout &&
+	test_cmp_config -C initial-config true core.sparseCheckoutCone &&
+	test_cmp_config -C initial-worktree true core.sparseCheckoutCone &&
+
+	# initial-config has a sparse-checkout file
+	# that only contains files at root.
+	ls initial-config >only-file &&
+	cat >expect <<-EOF &&
+	file
+	EOF
+	test_cmp expect only-file &&
+
+	# initial-worktree does not have its own sparse-checkout
+	# file, so the repply does not modify the worktree at all.
+	git -C initial-worktree sparse-checkout reapply &&
+	ls initial-worktree >all &&
+	cat >expect <<-EOF &&
+	dir
+	file
+	EOF
+	test_cmp expect all
+'
+
+test_expect_success 'set enables worktree config, if enabled' '
+	git init worktree-patterns &&
+	(
+		cd worktree-patterns &&
 		test_commit test file &&
-		test_path_is_missing .git/config.worktree &&
-		git sparse-checkout set nothing &&
-		test_path_is_file .git/config.worktree &&
-		test_cmp_config true core.sparseCheckout
-	)
+		mkdir dir dir2 &&
+		test_commit dir dir/file &&
+		test_commit dir2 dir2/file &&
+
+		# By initializing the worktree config here...
+		git worktree init-worktree-config &&
+
+		# This set command places config values in worktree-
+		# specific config...
+		git sparse-checkout set --cone dir &&
+
+		# Which must be copied, along with the sparse-checkout
+		# patterns, here.
+		git worktree add --detach ../worktree-patterns2
+	) &&
+	test_cmp_config -C worktree-patterns true core.sparseCheckout &&
+	test_cmp_config -C worktree-patterns2 true core.sparseCheckout &&
+	test_cmp_config -C worktree-patterns true core.sparseCheckoutCone &&
+	test_cmp_config -C worktree-patterns2 true core.sparseCheckoutCone &&
+	test_cmp worktree-patterns/.git/info/sparse-checkout \
+		 worktree-patterns/.git/worktrees/worktree-patterns2/info/sparse-checkout &&
+
+	ls worktree-patterns >expect &&
+	ls worktree-patterns2 >actual &&
+	test_cmp expect actual &&
+
+	# Double check that the copy works from a non-main worktree.
+	(
+		cd worktree-patterns2 &&
+		git sparse-checkout set dir2 &&
+		git worktree add --detach ../worktree-patterns3
+	) &&
+	test_cmp_config -C worktree-patterns3 true core.sparseCheckout &&
+	test_cmp_config -C worktree-patterns3 true core.sparseCheckoutCone &&
+	test_cmp worktree-patterns/.git/worktrees/worktree-patterns2/info/sparse-checkout \
+		 worktree-patterns/.git/worktrees/worktree-patterns3/info/sparse-checkout &&
+
+	ls worktree-patterns2 >expect &&
+	ls worktree-patterns3 >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success 'worktree add copies sparse-checkout patterns' '
+	git init worktree-config &&
+	(
+		cd worktree-config &&
+		test_commit test file &&
+		git worktree add --detach ../worktree-config2 &&
+		git worktree init-worktree-config &&
+		git sparse-checkout set --cone &&
+		git config --worktree core.sparseCheckout &&
+		git config --worktree core.sparseCheckoutCone
+	) &&
+	test_cmp_config -C worktree-config true core.sparseCheckout &&
+	test_must_fail git -C worktree-config2 core.sparseCheckout &&
+	test_cmp_config -C worktree-config true core.sparseCheckoutCone &&
+	test_must_fail git -C worktree-config2 core.sparseCheckoutCone
 '
 
 test_expect_success 'set sparse-checkout using builtin' '
@@ -202,6 +288,7 @@ test_expect_success 'add to sparse-checkout' '
 '
 
 test_expect_success 'cone mode: match patterns' '
+	git -C repo worktree init-worktree-config &&
 	git -C repo config --worktree core.sparseCheckoutCone true &&
 	rm -rf repo/a repo/folder1 repo/folder2 &&
 	git -C repo read-tree -mu HEAD 2>err &&
@@ -256,7 +343,7 @@ test_expect_success 'sparse-index enabled and disabled' '
 		test_cmp expect actual &&
 
 		git -C repo config --list >config &&
-		! grep index.sparse config
+		test_cmp_config -C repo false index.sparse
 	)
 '
 
@@ -395,6 +482,7 @@ test_expect_success 'fail when lock is taken' '
 '
 
 test_expect_success '.gitignore should not warn about cone mode' '
+	git -C repo worktree init-worktree-config &&
 	git -C repo config --worktree core.sparseCheckoutCone true &&
 	echo "**/bin/*" >repo/.gitignore &&
 	git -C repo reset --hard 2>err &&
@@ -521,11 +609,11 @@ test_expect_success 'interaction with submodules' '
 
 test_expect_success 'different sparse-checkouts with worktrees' '
 	git -C repo worktree add --detach ../worktree &&
-	check_files worktree "a deep folder1 folder2" &&
+	check_files worktree "a folder1" &&
 	git -C worktree sparse-checkout init --cone &&
-	git -C repo sparse-checkout set folder1 &&
+	git -C repo sparse-checkout set folder1 folder2 &&
 	git -C worktree sparse-checkout set deep/deeper1 &&
-	check_files repo a folder1 &&
+	check_files repo a folder1 folder2 &&
 	check_files worktree a deep
 '
 
